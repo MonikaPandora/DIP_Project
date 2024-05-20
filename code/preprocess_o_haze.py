@@ -1,5 +1,6 @@
 import os
 from PIL import Image
+import pandas as pd
 from math import ceil
 from tqdm import tqdm
 
@@ -78,6 +79,25 @@ def split_train_and_valid(train_portion=0.7):
     for gt, hazy in valid:
         shutil.move(gt, valid_gt_path)
         shutil.move(hazy, valid_hazy_path)
+
+
+# def gather_as_csv():
+#     train_gt_path = os.path.join(OHAZE_ROOT, 'train_crop_512/gt')
+#     train_hazy_path = os.path.join(OHAZE_ROOT, 'train_crop_512/hazy')
+#     valid_gt_path = os.path.join(OHAZE_ROOT, 'valid_crop_512/gt')
+#     valid_hazy_path = os.path.join(OHAZE_ROOT, 'valid_crop_512/hazy')
+#
+#     train_gt_names = list(os.listdir(train_gt_path))
+#     train_hazy_names = list(os.listdir(train_hazy_path))
+#     valid_gt_names = list(os.listdir(valid_gt_path))
+#     valid_hazy_names = list(os.listdir(valid_hazy_path))
+#
+#     assert len(train_hazy_names) == len(train_gt_names)
+#     assert len(valid_hazy_names) == len(valid_gt_names)
+#
+#     for i, pair in enumerate(zip(train_hazy_names, train_gt_names)):
+#         haze = Image.open(os.path.join(train_hazy_path, pair[0])).convert('RGB')
+#         gt = Image.open(os.path.join(train_gt_path, pair[1])).convert('RGB')
 
 
 if __name__ == '__main__':

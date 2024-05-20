@@ -1,35 +1,37 @@
-import gc
 import os
 
 from torch.backends import cudnn
 from tqdm import tqdm
 
-from model import DM2FNet
+from skimage.metrics import peak_signal_noise_ratio, structural_similarity
+from model import DM2FNet, DM2FNet_woPhy
 from datasets import OHazeDataset
 import torch
 from utils import *
 from torch import optim, nn
 from torch.utils.data import DataLoader
+import torch.cuda.amp as amp
 
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-torch.manual_seed(2024)
 
 cfgs = {
-    'num_features': 64,
+    'use_physical': True,
     'num_epoch': 3,
     'train_batch_size': 1,
     'last_epoch': 0,
     'lr': 2e-4,
     'lr_decay': 0.9,
     'weight_decay': 2e-5,
+    'momentum': 0.9,
+    # 'snapshot': 'step_14000_loss_0.11376_lr_0.000068',
     'snapshot': '',
     'val_freq': 1,
     'log_freq': 100,    # 100 step per log
     'crop_size': 512,
     'ckpt_path': '../checkpoints',
-    'dataset': 'ohaze',
+    'dataset': 'o-haze',
     'log_path': '../log/train_ohaze_log.txt'
 }
 
@@ -39,6 +41,7 @@ def validate(net, valid_loader, epoch, optimizer, criterion):
     net.eval()
 
     loss_record = AvgMeter()
+    psnr_record, ssim_record = AvgMeter(), AvgMeter()
 
     with torch.no_grad():
         for data in tqdm(valid_loader, desc=f"[Valid] epoch: {epoch}"):
@@ -51,6 +54,15 @@ def validate(net, valid_loader, epoch, optimizer, criterion):
 
             loss = criterion(dehaze, gt)
             loss_record.update(loss.item(), haze.size(0))
+
+            for i in range(len(haze)):
+                r = dehaze[i].cpu().numpy().transpose([1, 2, 0])  # data range [0, 1]
+                g = gt[i].cpu().numpy().transpose([1, 2, 0])
+                psnr = peak_signal_noise_ratio(g, r)
+                ssim = structural_similarity(g, r, data_range=1, multichannel=True,
+                                             gaussian_weights=True, sigma=1.5, use_sample_covariance=False)
+                psnr_record.update(psnr)
+                ssim_record.update(ssim)
 
     snapshot_name = 'epoch_%d_loss_%.5f_lr_%.6f' % (epoch + 1, loss_record.avg, optimizer.param_groups[1]['lr'])
     print('[validate]: [epoch %d], [loss %.5f]' % (epoch + 1, loss_record.avg))
@@ -65,70 +77,55 @@ def validate(net, valid_loader, epoch, optimizer, criterion):
 
 def train(net, train_loader, valid_loader, optimizer, criterion, log_path=None):
     epoch = cfgs['last_epoch']
-    step = epoch * len(train_loader)
-    total = cfgs['num_epoch'] * len(train_loader)
+    # step = epoch * len(train_loader)
+    # total = cfgs['num_epoch'] * len(train_loader)
+    step = 0
+    total = 40000
+
+    scaler = amp.GradScaler()
+    torch.cuda.empty_cache()
 
     for e in range(epoch, cfgs['num_epoch']):
         train_loss_record = AvgMeter()
-        loss_x_jf_record, loss_x_j0_record = AvgMeter(), AvgMeter()
+        loss_x_jf_record = AvgMeter()
         loss_x_j1_record, loss_x_j2_record = AvgMeter(), AvgMeter()
         loss_x_j3_record, loss_x_j4_record = AvgMeter(), AvgMeter()
-        loss_t_record, loss_a_record = AvgMeter(), AvgMeter()
 
         with tqdm(train_loader, desc=f"[Train] epoch: {e}") as bar:
             for data in bar:
-                torch.cuda.empty_cache()
                 optimizer.param_groups[0]['lr'] = 2 * cfgs['lr'] * (1 - float(step) / total) ** cfgs['lr_decay']
                 optimizer.param_groups[1]['lr'] = cfgs['lr'] * (1 - float(step) / total) ** cfgs['lr_decay']
 
                 data = list(data)
                 data = data + max(4 - len(data), 0) * [None]
-                haze, gt, gt_ato, gt_trans_map = data
+                haze, gt, _, _ = data
 
                 batch_size = haze.size(0)
 
                 haze = haze.to(device)
                 gt = gt.to(device)
-                gt_ato = gt_ato.to(device) if gt_ato is not None else None
-                gt_trans_map = gt_trans_map.to(device) if gt_ato is not None else None
 
                 optimizer.zero_grad()
 
-                x_jf, x_j0, x_j1, x_j2, x_j3, x_j4, t, a = net(haze)
+                with amp.autocast():
+                    x_jf, x_j1, x_j2, x_j3, x_j4 = net(haze)
 
-                loss_x_jf = criterion(x_jf, gt)
-                loss_x_j0 = criterion(x_j0, gt)
-                loss_x_j1 = criterion(x_j1, gt)
-                loss_x_j2 = criterion(x_j2, gt)
-                loss_x_j3 = criterion(x_j3, gt)
-                loss_x_j4 = criterion(x_j4, gt)
+                    loss_x_jf = criterion(x_jf, gt)
+                    loss_x_j1 = criterion(x_j1, gt)
+                    loss_x_j2 = criterion(x_j2, gt)
+                    loss_x_j3 = criterion(x_j3, gt)
+                    loss_x_j4 = criterion(x_j4, gt)
 
-                loss = loss_x_jf + loss_x_j0 + loss_x_j1 + loss_x_j2 + loss_x_j3 + loss_x_j4
+                    loss = loss_x_jf + loss_x_j1 + loss_x_j2 + loss_x_j3 + loss_x_j4
 
-                if gt_ato is not None:
-                    loss_a = criterion(a, gt_ato)
-                    loss_a_record.update(loss_a.item(), batch_size)
-                    loss += loss_a
-
-                if gt_trans_map is not None:
-                    loss_t = criterion(t, gt_trans_map)
-                    loss_t_record.update(loss_t.item(), batch_size)
-                    loss += loss_t
-
-                loss.backward()
-
-                # torch.nn.utils.clip_grad_value_(net.parameters(), clip_value=0.5)
-
-                optimizer.step()
-
-                del haze, gt
-                gc.collect()
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
 
                 # update recorder
                 train_loss_record.update(loss.item(), batch_size)
 
                 loss_x_jf_record.update(loss_x_jf.item(), batch_size)
-                loss_x_j0_record.update(loss_x_j0.item(), batch_size)
                 loss_x_j1_record.update(loss_x_j1.item(), batch_size)
                 loss_x_j2_record.update(loss_x_j2.item(), batch_size)
                 loss_x_j3_record.update(loss_x_j3.item(), batch_size)
@@ -139,12 +136,11 @@ def train(net, train_loader, valid_loader, optimizer, criterion, log_path=None):
                 step += 1
 
                 if (step + 1) % cfgs['log_freq'] == 0:
-                    log = '[step %d], [train loss %.5f], [loss_x_fusion %.5f], [loss_x_phy %.5f], [loss_x_j1 %.5f], ' \
-                          '[loss_x_j2 %.5f], [loss_x_j3 %.5f], [loss_x_j4 %.5f], [loss_t %.5f], [loss_a %.5f], ' \
-                          '[lr %.13f]' % \
-                          (step, train_loss_record.avg, loss_x_jf_record.avg, loss_x_j0_record.avg,
+                    log = '[step %d], [train loss %.5f], [loss_x_fusion %.5f], [loss_x_j1 %.5f], ' \
+                          '[loss_x_j2 %.5f], [loss_x_j3 %.5f], [loss_x_j4 %.5f], [lr %.13f]' % \
+                          (step + 1, train_loss_record.avg, loss_x_jf_record.avg,
                            loss_x_j1_record.avg, loss_x_j2_record.avg, loss_x_j3_record.avg, loss_x_j4_record.avg,
-                           loss_t_record.avg, loss_a_record.avg, optimizer.param_groups[1]['lr'])
+                           optimizer.param_groups[1]['lr'])
                     # print(log)
                     if log_path:
                         with open(log_path, 'a') as f:
@@ -157,8 +153,7 @@ def train(net, train_loader, valid_loader, optimizer, criterion, log_path=None):
 if __name__ == '__main__':
     cudnn.benchmark = True
 
-    model = DM2FNet(num_features=cfgs['num_features'],
-                    base='Base_' + cfgs['dataset'].upper()).to(device).train()
+    model = DM2FNet_woPhy().to(device).train()
     opt = optim.Adam([
         {'params': [param for name, param in model.named_parameters()
                     if name[-4:] == 'bias' and param.requires_grad],
