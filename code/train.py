@@ -17,7 +17,7 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 torch.manual_seed(2024)
 
 cfgs = {
-    'num_features': 64,
+    'num_features': 128,
     'num_epoch': 3,
     'train_batch_size': 1,
     'last_epoch': 0,

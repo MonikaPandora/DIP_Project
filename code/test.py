@@ -15,39 +15,30 @@ from torch.utils.data import DataLoader
 
 os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
-torch.cuda.set_device(0)
-
-ckpt_path = '../checkpoints'
-pred_path = '../predictions'
-dataset_name = 'O-HAZE'
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 args = {
-    # 'snapshot': 'iter_40000_loss_0.01230_lr_0.000000',
-    'snapshot': 'epoch_1_loss_0.10231_lr_0.000139',
+    'ckpt_path': '../checkpoints',
+    'pred_path': '../predictions',
+    'dataset_name': 'o-haze',
+    'base_name': 'Base_OHAZE',
+    'num_features': 128,
+    'snapshot': 'epoch_3_loss_0.05023_lr_0.000173'
 }
 
 to_test = {
     # 'SOTS': TEST_SOTS_ROOT,
-    'O-HAZE': '../datas/O-HAZE',
+    'O-HAZE': '../datas/O-HAZE/test',
 }
-
 
 to_pil = transforms.ToPILImage()
 
 
 def compute_ciede2000(gt, pred):
-    to_numpy = lambda x: transforms.ToTensor()(x).numpy()
-    pred = to_numpy(pred)
-    gt = to_numpy(gt)
-
-    pred = rgb2lab(pred)
-    gt = rgb2lab(gt)
-
-    return deltaE_ciede2000(gt.mean(axis=(0, 1)), pred.mean(axis=(0, 1)))
+    return deltaE_ciede2000(rgb2lab(gt), rgb2lab(pred))
 
 
 def main():
-    device = 'cpu'
     with torch.no_grad():
         criterion = nn.L1Loss().to(device)
 
@@ -56,19 +47,22 @@ def main():
                 net = DM2FNet().to(device)
                 # dataset = SotsDataset(root)
             elif 'O-HAZE' == name:
-                net = DM2FNet(num_features=128).to(device)
-                # dataset = OHazeDataset(os.path.join(root, 'test', 'hazy'),
-                #                        os.path.join(root, 'test', 'gt'),
-                #                        mode='test')
-                dataset = OHazeDataset(os.path.join(root, 'hazy'),
-                                       os.path.join(root, 'GT'),
+                net = model = DM2FNet(num_features=args['num_features'],
+                                      base=args['base_name']).to(device)
+                dataset = OHazeDataset(os.path.join(root, 'test', 'hazy'),
+                                       os.path.join(root, 'test', 'gt'),
                                        mode='test')
             else:
                 raise NotImplementedError
 
             if len(args['snapshot']) > 0:
                 print('load snapshot \'%s\' for testing' % args['snapshot'])
-                net.load_state_dict(torch.load(os.path.join(ckpt_path, dataset_name, args['snapshot'] + '.pth')))
+                net.load_state_dict(
+                    torch.load(
+                        os.path.join(args['ckpt_path'], args['dataset_name'], args['snapshot'] + '.pth'),
+                        map_location='cuda' if torch.cuda.is_available() else 'cpu'
+                    )
+                )
 
             net.eval()
             dataloader = DataLoader(dataset, batch_size=1)
@@ -76,12 +70,12 @@ def main():
             mses, psnrs, ssims, ciede2000 = [], [], [], []
             loss_record = AvgMeter()
 
-            for data in tqdm(dataloader, desc='[Pred]:'):
+            for data in tqdm(dataloader, desc='[Pred]'):
                 # haze_image, _, _, _, fs = data
                 haze, gts, fs = data
                 # print(haze.shape, gts.shape)
 
-                os.makedirs(os.path.join(pred_path, dataset_name, args['snapshot']), exist_ok=True)
+                os.makedirs(os.path.join(args['pred_path'], args['dataset_name'], args['snapshot']), exist_ok=True)
 
                 haze = haze.to(device)
 
@@ -107,7 +101,7 @@ def main():
 
                 for r, f in zip(res.cpu(), fs):
                     to_pil(r).save(
-                        os.path.join(pred_path, dataset_name, args['snapshot'], '%s.jpg' % f))
+                        os.path.join(args['pred_path'], args['dataset_name'], args['snapshot'], '%s.jpg' % f))
 
             print(f"[{name}] L1: {loss_record.avg:.6f}, MSE: {np.mean(mses):.6f}, "
                   f"PSNR: {np.mean(psnrs):.6f}, SSIM: {np.mean(ssims):.6f}, CIEDE2000: {np.mean(ciede2000):.6f}")

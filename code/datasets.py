@@ -12,31 +12,16 @@ to_tensor = ToTensor()
 class OHazeDataset(data.Dataset):
     def __init__(self, hazy_path, gt_path, mode='train'):
         self.mode = mode
-        hazy = os.listdir(hazy_path)
-        gt = os.listdir(gt_path)
-        self.data_paths = list(zip(
-            [os.path.join(hazy_path, name) for name in hazy],
-            [os.path.join(gt_path, name) for name in gt]
-        ))
 
-        # abandon some crashed image
-        # hazy = []
-        # gt = []
-        # for h, g in self.data_paths:
-        #     try:
-        #         hz = Image.open(h).convert('RGB')
-        #         t = Image.open(g).convert('RGB')
-        #     except :
-        #         print(f'delete: ', h, g)
-        #         os.remove(h)
-        #         os.remove(g)
-        #     else:
-        #         hazy.append(h)
-        #         gt.append(g)
-        # self.data_paths = list(zip(
-        #     hazy,
-        #     gt
-        # ))
+        gt = []
+        for name in os.listdir(hazy_path):
+            gt_name = name.replace('hazy', 'GT')
+            assert os.path.exists(os.path.join(gt_path, gt_name)), name
+            gt.append(os.path.join(gt_path, gt_name))
+
+        hazy = [os.path.join(hazy_path, name) for name in os.listdir(hazy_path)]
+
+        self.data_paths = list(zip(hazy, gt))
 
     def __getitem__(self, index):
         """
