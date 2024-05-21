@@ -30,7 +30,10 @@ cfgs = {
     'crop_size': 512,
     'ckpt_path': '../checkpoints',
     'dataset': 'ohaze',
-    'log_path': '../log/train_ohaze_log.txt'
+    'log_path': '../log/train_ohaze_log.txt',
+    'train_path': '../datas/O-HAZE/train_crop_512',
+    'valid_path': '../data/O-HAZE/valid',
+    'base_name': 'Base_OHAZE'
 }
 
 
@@ -158,7 +161,7 @@ if __name__ == '__main__':
     cudnn.benchmark = True
 
     model = DM2FNet(num_features=cfgs['num_features'],
-                    base='Base_' + cfgs['dataset'].upper()).to(device).train()
+                    base=cfgs['base_name']).to(device).train()
     opt = optim.Adam([
         {'params': [param for name, param in model.named_parameters()
                     if name[-4:] == 'bias' and param.requires_grad],
@@ -169,16 +172,16 @@ if __name__ == '__main__':
          'weight_decay': cfgs['weight_decay']}
     ], lr=cfgs['lr'], weight_decay=cfgs['weight_decay'])
 
-    train_hazy_path = '../datas/O-HAZE/train_crop_512/hazy'
-    train_gt_path = '../datas/O-HAZE/train_crop_512/gt'
+    train_hazy_path = os.path.join(cfgs['train_path'], 'hazy')
+    train_gt_path = os.path.join(cfgs['train_path'], 'gt')
     train_data_loader = OHazeDataset(train_hazy_path, train_gt_path)
     train_data_loader = DataLoader(train_data_loader, batch_size=cfgs['train_batch_size'],
                                    shuffle=True, drop_last=True)
 
-    valid_hazy_path = '../datas/O-HAZE/valid_crop_512/hazy'
-    valid_gt_path = '../datas/O-HAZE/valid_crop_512/gt'
+    valid_hazy_path = os.path.join(cfgs['valid_path'], 'hazy')
+    valid_gt_path = os.path.join(cfgs['valid_path'], 'gt')
     valid_data_loader = OHazeDataset(valid_hazy_path, valid_gt_path, mode='valid')
-    valid_data_loader = DataLoader(valid_data_loader, batch_size=cfgs['train_batch_size'])
+    valid_data_loader = DataLoader(valid_data_loader, batch_size=1)
 
     if cfgs['snapshot']:
         model.load_state_dict(torch.load(os.path.join(cfgs['ckpt_path'], cfgs['dataset'], cfgs['snapshot']+'.pth')))
