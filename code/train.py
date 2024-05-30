@@ -5,7 +5,7 @@ from torch.backends import cudnn
 from tqdm import tqdm
 
 from model import DM2FNet
-from datasets import OHazeDataset
+from datasets import OHazeDataset, ITS_Dataset, SotsDataset
 import torch
 from utils import *
 from torch import optim, nn
@@ -16,24 +16,45 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 torch.manual_seed(2024)
 
+# cfgs = {
+#     'num_features': 128,
+#     'num_epoch': 20,
+#     'train_batch_size': 8,
+#     'last_epoch': 0,
+#     'lr': 2e-4,
+#     'lr_decay': 0.9,
+#     'weight_decay': 2e-5,
+#     'snapshot': '',
+#     'val_freq': 1,
+#     'log_freq': 100,    # 100 step per log
+#     'crop_size': 512,
+#     'ckpt_path': '../checkpoints',
+#     'dataset': 'ohaze',
+#     'log_path': '../log/train_ohaze_log.txt',
+#     'train_path': '../datas/O-HAZE/train_crop_512',
+#     'valid_path': '../data/O-HAZE/valid',
+#     'base_name': 'Base_OHAZE'
+# }
+
+
 cfgs = {
     'num_features': 128,
-    'num_epoch': 3,
-    'train_batch_size': 1,
+    'num_epoch': 30,
+    'train_batch_size': 16,
     'last_epoch': 0,
-    'lr': 2e-4,
+    'lr': 5e-4,
     'lr_decay': 0.9,
-    'weight_decay': 2e-5,
+    'weight_decay': 0,
     'snapshot': '',
-    'val_freq': 1,
+    'val_freq': 5,
     'log_freq': 100,    # 100 step per log
-    'crop_size': 512,
+    'crop_size': 256,
     'ckpt_path': '../checkpoints',
-    'dataset': 'ohaze',
-    'log_path': '../log/train_ohaze_log.txt',
-    'train_path': '../datas/O-HAZE/train_crop_512',
-    'valid_path': '../data/O-HAZE/valid',
-    'base_name': 'Base_OHAZE'
+    'dataset': 'its',
+    'log_path': '../log/train_its_log.txt',
+    'train_path': '../datas/ITS_v2',
+    'valid_path': '../datas/SOTS/nyuhaze500',
+    'base_name': 'Base_ITS'
 }
 
 
@@ -116,7 +137,7 @@ def train(net, train_loader, valid_loader, optimizer, criterion, log_path=None):
                 if gt_trans_map is not None:
                     loss_t = criterion(t, gt_trans_map)
                     loss_t_record.update(loss_t.item(), batch_size)
-                    loss += loss_t
+                    loss += 10 * loss_t
 
                 loss.backward()
 
@@ -172,16 +193,26 @@ if __name__ == '__main__':
          'weight_decay': cfgs['weight_decay']}
     ], lr=cfgs['lr'], weight_decay=cfgs['weight_decay'])
 
-    train_hazy_path = os.path.join(cfgs['train_path'], 'hazy')
-    train_gt_path = os.path.join(cfgs['train_path'], 'gt')
-    train_data_loader = OHazeDataset(train_hazy_path, train_gt_path)
-    train_data_loader = DataLoader(train_data_loader, batch_size=cfgs['train_batch_size'],
-                                   shuffle=True, drop_last=True)
+    if cfgs['dataset'] == 'ohaze':
+        train_hazy_path = os.path.join(cfgs['train_path'], 'hazy')
+        train_gt_path = os.path.join(cfgs['train_path'], 'gt')
+        train_data_loader = OHazeDataset(train_hazy_path, train_gt_path)
+        train_data_loader = DataLoader(train_data_loader, batch_size=cfgs['train_batch_size'],
+                                       shuffle=True, drop_last=True)
 
-    valid_hazy_path = os.path.join(cfgs['valid_path'], 'hazy')
-    valid_gt_path = os.path.join(cfgs['valid_path'], 'gt')
-    valid_data_loader = OHazeDataset(valid_hazy_path, valid_gt_path, mode='valid')
-    valid_data_loader = DataLoader(valid_data_loader, batch_size=1)
+        valid_hazy_path = os.path.join(cfgs['valid_path'], 'hazy')
+        valid_gt_path = os.path.join(cfgs['valid_path'], 'gt')
+        valid_data_loader = OHazeDataset(valid_hazy_path, valid_gt_path, mode='valid')
+        valid_data_loader = DataLoader(valid_data_loader, batch_size=1)
+    elif cfgs['dataset'] == 'its':
+        train_dataset = ITS_Dataset(cfgs['train_path'], True, cfgs['crop_size'])
+        train_data_loader = DataLoader(train_dataset, batch_size=cfgs['train_batch_size'], num_workers=4,
+                                  shuffle=True, drop_last=True)
+
+        valid_dataset = SotsDataset(cfgs['valid_path'])
+        valid_data_loader = DataLoader(valid_dataset, batch_size=8)
+    else:
+        raise NotImplementedError
 
     if cfgs['snapshot']:
         model.load_state_dict(torch.load(os.path.join(cfgs['ckpt_path'], cfgs['dataset'], cfgs['snapshot']+'.pth')))
